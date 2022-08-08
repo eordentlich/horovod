@@ -15,10 +15,13 @@
 
 #include "adapter_v2.h"
 #include "cuda_util.h"
+#include "ready_event.h"
 
 namespace horovod {
 namespace torch {
 
+int GetDeviceID(const ::torch::Tensor& tensor);
+  
 ::torch::ScalarType GetTorchDataType(DataType dtype) {
   switch (dtype) {
   case common::HOROVOD_UINT8:
@@ -134,6 +137,10 @@ Status TorchOpContext::AllocateOutput(int output_index, TensorShape shape,
   with_device device_context(output_devices_.at(output_index));
   outputs_.at(output_index).resize_(shape_vector);
   *tensor = std::make_shared<TorchTensor>(outputs_.at(output_index));
+#if HAVE_GPU
+  auto _device = GetDeviceID(outputs_.at(output_index));
+  *event = RecordReadyEvent(_device);
+#endif
   return Status::OK();
 }
 

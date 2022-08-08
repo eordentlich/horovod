@@ -47,13 +47,6 @@ std::string GetOpName(const std::string& prefix, const std::string& name,
   return prefix + ".noname." + std::to_string(handle);
 }
 
-int GetDeviceID(const ::torch::Tensor& tensor) {
-  if (tensor.device().is_cuda()) {
-    return tensor.device().index();
-  }
-  return CPU_DEVICE_ID;
-}
-
 } // namespace
 
 void DivideInPlace(::torch::Tensor& tensor, int divisor) {
@@ -62,6 +55,13 @@ void DivideInPlace(::torch::Tensor& tensor, int divisor) {
     return;
   }
   tensor.div_(divisor);
+}
+
+int GetDeviceID(const ::torch::Tensor& tensor) {
+  if (tensor.device().is_cuda()) {
+    return tensor.device().index();
+  }
+  return CPU_DEVICE_ID;
 }
 
 #if HAVE_GPU

@@ -19,7 +19,7 @@
 import torch
 
 import warnings
-
+import time
 from horovod.common.basics import HorovodBasics as _HorovodBasics
 from horovod.common.exceptions import HorovodInternalError
 from horovod.common.process_sets import _setup as _setup_process_sets
@@ -89,7 +89,7 @@ _setup_process_sets(_basics)
 # We keep input in order to make sure it does not get garbage collected
 # before the operation is finished.
 _handle_map = {}
-
+_check_map = {}
 
 def _check_function(function_factory, tensor):
     function = function_factory(tensor)
@@ -558,8 +558,12 @@ def sparse_allreduce_async(tensor, name, op, process_set=global_process_set):
     # indices to enforce correct concatenation behavior, then transpose back prior to
     # constructing the new aggregated sparse gradient
     t = tensor
+
+    before_call = (t._indices().max(),t._indices().min())    
     indices_handle = allgather_async(t._indices().transpose(0, 1).contiguous(), name=f'{name}.indices',
                                      process_set=process_set)
+    after_call = (t._indices().max(),t._indices().min())    
+    _check_map[indices_handle] = (before_call, after_call)
     values_handle = allgather_async(t._values(), name=f'{name}.values', process_set=process_set)
 
     def handle():
@@ -569,11 +573,31 @@ def sparse_allreduce_async(tensor, name, op, process_set=global_process_set):
         indices = synchronize(indices_handle)
 
         values = (values / process_set.size()) if op == Average else values
-
-        if indices.dim() == 0 or values.dim() == 0:
-            return t.new().resize_as_(t)
-        return t.new(indices.transpose(0, 1), values, t.size())
-
+        ret_val = None
+        counter=0
+        while True:
+            try:
+                _values = (values / process_set.size()) if op == Average else values
+                if indices.dim() == 0 or values.dim() == 0:
+                    ret_val = t.new().resize_as_(t)
+                else:
+                    ret_val = t.new(indices.transpose(0, 1), _values, t.size())
+                _check_map.pop(indices_handle)
+                return ret_val
+            except Exception as ex:
+                print(str(ex))
+                print('values: ' + str(values))
+                print('indices: ' + str(indices))
+                print(f'saved max - before: {_check_map[indices_handle][0][0]}')
+                print(f'saved min - before: {_check_map[indices_handle][0][1]}')
+                print(f'saved max - after: {_check_map[indices_handle][1][0]}')
+                print(f'saved min - after: {_check_map[indices_handle][1][1]}')
+                counter += 1
+                if (counter == 4):
+                    raise ex
+            time.sleep(0.25)
+        # never gets here
+        return ret_val
     return handle
 
 
@@ -612,6 +636,9 @@ def allgather_async(tensor, name=None, process_set=global_process_set):
         A handle to the allgather operation that can be used with `poll()` or
         `synchronize()`.
     """
+    #in_shp = tensor.shape
+    #out_shp = torch.Size([in_shp[0]*2] + list(in_shp[1:]))
+    #output = tensor.new(out_shp)
     output = tensor.new()
     return _allgather_async(tensor, output, name, process_set)
 
